@@ -53,19 +53,9 @@ func upgradeTestSuite(t *testing.T) {
 	require.NoError(t, err)
 
 	// test if Windows workloads are running by creating a Job that curls the workloads continuously.
-	deployment, err := testCtx.deployWindowsWebServer("win-webserver", nil)
-	require.NoErrorf(t, err, "error creating Windows Webserver deployment for upgrade test")
-	defer testCtx.deleteDeployment(deployment.Name)
-
-	// create a clusterIP service which can be used to reach the Windows webserver
-	intermediarySVC, err := testCtx.createService(deployment.Name, v1.ServiceTypeClusterIP, *deployment.Spec.Selector)
-	require.NoErrorf(t, err, "error creating service for deployment %s", deployment.Name)
-	defer testCtx.deleteService(intermediarySVC.Name)
-
-	// create a Job object that continuously curls the webserver every 5 seconds.
-	testerJob, err := testCtx.createLinuxJob(windowsWorkloadTesterJob, generateLinuxWorkloadTesterCommand(intermediarySVC.Spec.ClusterIP))
-	require.NoErrorf(t, err, "error creating linux job %s", windowsWorkloadTesterJob)
-	defer testCtx.deleteJob(testerJob.Name)
+	cleanupWorkloadAndTester, err := testCtx.deployWindowsWorkloadAndTester()
+	require.NoError(t, err, "error deploying Windows workloads")
+	defer cleanupWorkloadAndTester()
 
 	// apply configuration steps before running the upgrade tests
 	err = testCtx.configureUpgradeTest()
@@ -177,4 +167,32 @@ func (tc *testContext) scaleWMCODeployment(desiredReplicas int32) error {
 	})
 
 	return err
+}
+
+// deployWindowsWorkloadAndTester tests if the Windows Webserver deployment is available.
+// This is achieved by creating a Job object that continuously curls the webserver every 5 seconds.
+// returns a tearDown func that must be executed to cleanup resources
+func (tc *testContext) deployWindowsWorkloadAndTester() (func(), error) {
+	// create a Windows Webserver deployment
+	deployment, err := tc.deployWindowsWebServer("win-webserver", nil)
+	if err != nil {
+		return nil, errors.Wrap(err, "error creating Windows Webserver deployment for upgrade test")
+	}
+	// create a clusterIP service which can be used to reach the Windows webserver
+	intermediarySVC, err := tc.createService(deployment.Name, v1.ServiceTypeClusterIP, *deployment.Spec.Selector)
+	if err != nil {
+		return nil, errors.Wrapf(err, "error creating service for deployment %s", deployment.Name)
+	}
+	// create a Job object that continuously curls the webserver every 5 seconds.
+	testerJob, err := tc.createLinuxJob(windowsWorkloadTesterJob, generateLinuxWorkloadTesterCommand(intermediarySVC.Spec.ClusterIP))
+	if err != nil {
+		return nil, errors.Wrapf(err, "error creating linux job %s", windowsWorkloadTesterJob)
+	}
+	// return a cleanup func
+	return func() {
+		// ignore errors while deleting the objects
+		_ = tc.deleteDeployment(deployment.Name)
+		_ = tc.deleteService(intermediarySVC.Name)
+		_ = tc.deleteJob(testerJob.Name)
+	}, nil
 }
