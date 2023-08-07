@@ -17,7 +17,7 @@ metadata:
     operators.operatorframework.io/project_layout: go.kubebuilder.io/v3
     repository: https://github.com/openshift/windows-machine-config-operator
     support: Red Hat
-  name: windows-machine-config-operator.v5.1.1
+  name: windows-machine-config-operator.v5.1.2
   namespace: placeholder
 spec:
   apiservicedefinitions: {}
@@ -36,7 +36,7 @@ spec:
     official support.
 
     ### Pre-requisites
-    * A Red Hat OpenShift Container Platform for Windows Containers subscription [subscription page](https://access.redhat.com/support/policy/updates/openshift#windows)
+    * A Red Hat OpenShift Container Platform for Windows Containers subscription
     * OCP 4.10 cluster running on Azure, AWS or vSphere configured with hybrid OVN Kubernetes networking
     * [WMCO prerequisites](https://docs.openshift.com/container-platform/4.10/windows_containers/understanding-windows-container-workloads.html#wmco-prerequisites__understanding-windows-container-workloads)
 
@@ -441,4 +441,4 @@ spec:
   minKubeVersion: 1.23.0
   provider:
     name: Red Hat
-  version: 5.1.1
+  version: 5.1.2
