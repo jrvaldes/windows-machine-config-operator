@@ -59,3 +59,42 @@ WantedBy=multi-user.target
 	assert.Equal(t, "/etc/kubernetes/cloud.conf", args[CloudConfigOption])
 
 }
+
+func TestGetEscapedData(t *testing.T) {
+	tests := []struct {
+		name string
+		data []byte
+		want string
+	}{
+		{
+			name: "empty data",
+			data: []byte(""),
+			want: "data:,",
+		},
+		{
+			name: "with space",
+			data: []byte("a b"),
+			want: "data:,a%20b",
+		},
+		{
+			name: "with new line",
+			data: []byte("a\nb"),
+			want: "data:,a%0Ab",
+		},
+		{
+			name: "with tabulation",
+			data: []byte("a\tb"),
+			want: "data:,a%09b",
+		},
+		{
+			name: "CA like",
+			data: []byte("-----BEGIN CERTIFICATE-----\nMIIDMDCCAhigAwIBAgIIdhr1kYMDqpYwDQYJKoZIhvcNAQELBQAwNjESMBAGA1UE\nREDACTED\nJ09L8w==\n-----END CERTIFICATE-----\n"),
+			want: "data:,-----BEGIN%20CERTIFICATE-----%0AMIIDMDCCAhigAwIBAgIIdhr1kYMDqpYwDQYJKoZIhvcNAQELBQAwNjESMBAGA1UE%0AREDACTED%0AJ09L8w%3D%3D%0A-----END%20CERTIFICATE-----%0A",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, getEscapedData(tt.data))
+		})
+	}
+}

@@ -3,18 +3,21 @@ package ignition
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 
 	ignCfg "github.com/coreos/ignition/v2/config/v3_2"
 	ignCfgTypes "github.com/coreos/ignition/v2/config/v3_2/types"
 	mcfg "github.com/openshift/machine-config-operator/pkg/apis/machineconfiguration.openshift.io/v1"
+	"github.com/vincent-petithory/dataurl"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // Watch permission are needed in order to populate the cache. We use a cached client to list machineconfig resources.
 //+kubebuilder:rbac:groups="machineconfiguration.openshift.io",resources=machineconfigs,verbs=list;watch
+//+kubebuilder:rbac:groups="machineconfiguration.openshift.io",resources=controllerconfigs,verbs=list;watch
 
 const (
 	// kubeletSystemdName is the name of the systemd service that the kubelet runs under,
@@ -60,6 +63,45 @@ func New(c client.Client) (*Ignition, error) {
 	}
 	log.V(1).Info("parsed", "machineconfig", renderedWorker.GetName(), "ignition version",
 		configuration.Ignition.Version)
+
+	// check if kubelet-ca is already present in ignition files. This is a short-circuit to avoid unnecessary API call
+	// and could be removed after the kubelet-ca have been completely removed from ignition files.
+	for _, file := range ign.config.Storage.Files {
+		if file.Node.Path == KubeletCACertPath {
+			log.V(1).Info("kubelet-ca present in storage files", "path", KubeletCACertPath)
+			return ign, nil
+		}
+	}
+	log.V(1).Info("kubelet-ca not found in storage files", "count", len(ign.config.Storage.Files))
+	ccList := mcfg.ControllerConfigList{}
+	if err := c.List(context.TODO(), &ccList); err != nil {
+		return nil, err
+	}
+	var kubeletCABytes []byte
+	for _, item := range ccList.Items {
+		if item.Spec.KubeAPIServerServingCAData != nil {
+			log.V(1).Info("processing kubelet-ca", "ControllerConfig", item.Name)
+			kubeletCABytes = item.Spec.KubeAPIServerServingCAData
+			break
+		}
+	}
+	if len(kubeletCABytes) == 0 {
+		return nil, fmt.Errorf("cannot find kubelet-ca")
+	}
+	// escape and append kubelet-ca raw content to ignition files
+	source := getEscapedData(kubeletCABytes)
+	ign.config.Storage.Files = append(ign.config.Storage.Files, ignCfgTypes.File{
+		Node: ignCfgTypes.Node{
+			Path: KubeletCACertPath,
+		},
+		FileEmbedded1: ignCfgTypes.FileEmbedded1{
+			Contents: ignCfgTypes.Resource{
+				Source: &source,
+			},
+		},
+	})
+	log.V(1).Info("kubelet-ca added to storage files", "count", len(ign.config.Storage.Files))
+
 	return ign, nil
 }
 
@@ -85,6 +127,14 @@ func (ign *Ignition) GetKubeletArgs() (map[string]string, error) {
 		return nil, fmt.Errorf("error parsing kubelet systemd unit args: %w", err)
 	}
 	return argsFromIgnition, nil
+}
+
+// getEscapedData returns a string representation of a URL data with path escaping
+func getEscapedData(data []byte) string {
+	return (&url.URL{
+		Scheme: "data",
+		Opaque: "," + dataurl.Escape(data),
+	}).String()
 }
 
 // getLatestRenderedWorker returns the most recently created rendered worker MachineConfig
