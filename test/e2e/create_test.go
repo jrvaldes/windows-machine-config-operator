@@ -173,10 +173,53 @@ func (tc *testContext) testMachineConfiguration(t *testing.T) {
 		// Replace the known private key with a randomly generated one.
 		err = tc.createPrivateKeySecret(false)
 		require.NoError(t, err, "error replacing private key secret")
+		// Wait for machines to be reconciled by deletion
+		err = tc.waitForMachinesDeleted(machines.Items)
+		require.NoError(t, err, "error waiting for machines deletion after private key secret change")
+		// Wait machines to be provisioned and update the machines list
+		machines, err = tc.waitForWindowsMachines(int(gc.numberOfMachineNodes), "Provisioned", false)
+		require.NoError(t, err, "error waiting for Windows Machines to be provisioned")
 	}
 	err = tc.waitForConfiguredWindowsNodes(gc.numberOfMachineNodes, false, false)
 	assert.NoError(t, err, "Windows node creation failed")
 	tc.machineLogCollection(machines.Items)
+}
+
+// waitForMachinesDeleted waits for the given list of machines to be deleted
+func (tc *testContext) waitForMachinesDeleted(machinesToDelete []mapi.Machine) error {
+	if len(machinesToDelete) == 0 {
+		return nil
+	}
+	// deletion of machines takes time, no need to poll too frequently
+	deletionRetryInterval := time.Minute * 1
+	deletionTimeLimit := time.Duration(len(machinesToDelete)) * time.Minute * 10
+	log.Printf("waiting (timeout: %s) for %d Windows Machine(s) to be deleted",
+		deletionTimeLimit.String(), len(machinesToDelete))
+	// list only e2e labeled machines
+	listOptions := metav1.ListOptions{LabelSelector: clusterinfo.MachineE2ELabel + "=true"}
+	// wait retry interval first and then poll until all machines are deleted
+	return wait.PollUntilContextTimeout(context.TODO(), deletionRetryInterval, deletionTimeLimit, false,
+		func(ctx context.Context) (done bool, err error) {
+			currentMachines, err := tc.client.Machine.Machines(clusterinfo.MachineAPINamespace).List(context.TODO(),
+				listOptions)
+			if err != nil {
+				if apierrors.IsNotFound(err) {
+					return true, nil
+				}
+				log.Printf("machine object listing failed, retrying: %v", err)
+				return false, nil
+			}
+			for _, toDelete := range machinesToDelete {
+				for _, current := range currentMachines.Items {
+					if current.GetName() == toDelete.GetName() {
+						log.Printf("waiting for machine %s to be deleted", toDelete.GetName())
+						return false, nil
+					}
+				}
+			}
+			// all machines were deleted
+			return true, nil
+		})
 }
 
 // machineLogCollection makes a best effort attempt to collect logs from each Machine instance
