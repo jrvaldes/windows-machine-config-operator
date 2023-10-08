@@ -47,9 +47,6 @@ import (
 //+kubebuilder:rbac:groups="",resources=events,verbs=*
 
 const (
-	// maxUnhealthyCount is the maximum number of nodes that are not ready to serve at a given time.
-	// TODO: https://issues.redhat.com/browse/WINC-524
-	maxUnhealthyCount = 1
 	// MachineOSLabel is the label used to identify the Windows Machines.
 	MachineOSLabel = "machine.openshift.io/os-id"
 	// WindowsMachineController is the name of this controller in logs and other outputs.
