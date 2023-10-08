@@ -19,6 +19,7 @@ package controllers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"reflect"
@@ -197,7 +198,7 @@ func (r *ConfigMapReconciler) Reconcile(ctx context.Context,
 	case servicescm.Name:
 		return ctrl.Result{}, r.reconcileServices(ctx, configMap)
 	case wiparser.InstanceConfigMap:
-		return ctrl.Result{}, r.reconcileNodes(ctx, configMap)
+		return r.reconcileNodes(ctx, configMap)
 	case certificates.KubeAPIServerServingCAConfigMapName:
 		return ctrl.Result{}, r.reconcileKubeletClientCA(ctx, configMap)
 	case certificates.ProxyCertsConfigMap:
@@ -273,37 +274,43 @@ func isTiedToRelevantVersion(v string, versions map[string]struct{}) bool {
 }
 
 // reconcileNodes corrects the discrepancy between the "expected" instances, and the "actual" Node list
-func (r *ConfigMapReconciler) reconcileNodes(ctx context.Context, windowsInstances *core.ConfigMap) error {
+func (r *ConfigMapReconciler) reconcileNodes(ctx context.Context, windowsInstances *core.ConfigMap) (ctrl.Result,
+	error) {
 	// Get the current list of Windows BYOH Nodes
 	nodes := &core.NodeList{}
 	err := r.client.List(ctx, nodes, client.MatchingLabels{BYOHLabel: "true", core.LabelOSStable: "windows"})
 	if err != nil {
-		return fmt.Errorf("error listing nodes: %w", err)
+		return ctrl.Result{}, fmt.Errorf("error listing nodes: %w", err)
 	}
 
 	// Get the list of instances that are expected to be Nodes
 	instances, err := wiparser.Parse(windowsInstances.Data, nodes)
 	if err != nil {
-		return fmt.Errorf("unable to parse instances from ConfigMap: %w", err)
+		return ctrl.Result{}, fmt.Errorf("unable to parse instances from ConfigMap: %w", err)
 	}
 
 	r.log.Info("processing", "instances in", wiparser.InstanceConfigMap)
 	// For each instance, ensure that it is configured into a node
 	if err := r.ensureInstancesAreUpToDate(instances); err != nil {
+		// check unhealthy count
+		var maxUnhealthyErr *MaxUnhealthyErr
+		if errors.As(err, &maxUnhealthyErr) {
+			return r.reconcileMaxUnhealthyErr(windowsInstances, err)
+		}
 		r.recorder.Eventf(windowsInstances, core.EventTypeWarning, "InstanceSetupFailure", err.Error())
-		return err
+		return ctrl.Result{}, err
 	}
 
 	// Ensure that only instances currently specified by the ConfigMap are joined to the cluster as nodes
 	if err = r.deconfigureInstances(instances, nodes); err != nil {
-		return fmt.Errorf("error removing undesired nodes from cluster: %w", err)
+		return ctrl.Result{}, fmt.Errorf("error removing undesired nodes from cluster: %w", err)
 	}
 
 	// Once all the proper Nodes are in the cluster, configure the prometheus endpoints.
 	if err := r.prometheusNodeConfig.Configure(); err != nil {
-		return fmt.Errorf("unable to configure Prometheus: %w", err)
+		return ctrl.Result{}, fmt.Errorf("unable to configure Prometheus: %w", err)
 	}
-	return nil
+	return ctrl.Result{}, nil
 }
 
 // ensureInstancesAreUpToDate configures all instances that require configuration

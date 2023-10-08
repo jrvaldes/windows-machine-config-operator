@@ -9,9 +9,11 @@ import (
 	config "github.com/openshift/api/config/v1"
 	"golang.org/x/crypto/ssh"
 	core "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	kubeTypes "k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/record"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
@@ -23,6 +25,7 @@ import (
 	"github.com/openshift/windows-machine-config-operator/pkg/metadata"
 	"github.com/openshift/windows-machine-config-operator/pkg/metrics"
 	"github.com/openshift/windows-machine-config-operator/pkg/nodeconfig"
+	"github.com/openshift/windows-machine-config-operator/pkg/retry"
 	"github.com/openshift/windows-machine-config-operator/pkg/secrets"
 	"github.com/openshift/windows-machine-config-operator/version"
 )
@@ -32,6 +35,21 @@ const (
 	// TODO: https://issues.redhat.com/browse/WINC-524
 	maxUnhealthyCount = 1
 )
+
+// MaxUnhealthyErr happens when the maximum number of unhealthy nodes is reached
+type MaxUnhealthyErr struct {
+	err string
+}
+
+// Satisfies the error interface for MaxUnhealthyErr
+func (e *MaxUnhealthyErr) Error() string {
+	return fmt.Sprintf("max unhealthy exceeded: %s", e.err)
+}
+
+// newMaxUnhealthyErr returns a new MaxUnhealthyErr
+func newMaxUnhealthyErr(err error) *MaxUnhealthyErr {
+	return &MaxUnhealthyErr{err: err.Error()}
+}
 
 // instanceReconciler contains everything needed to perform actions on a Windows instance
 type instanceReconciler struct {
@@ -82,12 +100,89 @@ func (r *instanceReconciler) ensureInstanceIsUpToDate(instanceInfo *instance.Inf
 		// Instance requiring an upgrade indicates that node object is present with the version annotation
 		r.log.Info("instance requires upgrade", "node", instanceInfo.Node.GetName(), "version",
 			instanceInfo.Node.GetAnnotations()[metadata.VersionAnnotation], "expected version", version.Get())
+
+		// check the allowed number of unhealthy nodes and return an error if the limit is reached
+		if err := r.checkUnhealthyCountForNode(instanceInfo.Node); err != nil {
+			return err
+		}
 		if err := nc.Deconfigure(); err != nil {
 			return err
 		}
 	}
 
 	return nc.Configure()
+}
+
+// checkUnhealthyCountForNode checks the number of unhealthy nodes and returns an error if max capacity is reached
+// following the maxUnhealthyCount limit
+func (r *instanceReconciler) checkUnhealthyCountForNode(current *core.Node) error {
+	// get the current list of Windows nodes, both BYOH and Machine nodes
+	nodes := &core.NodeList{}
+	err := r.client.List(context.TODO(), nodes, client.MatchingLabels{core.LabelOSStable: "windows"})
+	if err != nil {
+		return fmt.Errorf("error listing nodes: %w", err)
+	}
+	// collect unhealthy nodes
+	var unhealthyNodes []*core.Node
+	for _, node := range nodes.Items {
+		if r.isNodeUnhealthy(&node) {
+			// return if the current node is in the unhealthy list so that ongoing reconciliation is not interrupted
+			if node.Name == current.Name {
+				r.log.V(1).Info("processing unhealthy", "node", node.Name)
+				return nil
+			}
+			unhealthyNodes = append(unhealthyNodes, &node)
+		}
+	}
+
+	if len(unhealthyNodes) < maxUnhealthyCount {
+		// check passes given the number of unhealthy nodes is less than the max allowed
+		return nil
+	}
+	return newMaxUnhealthyErr(fmt.Errorf("unhealthy count %d must be less than %d", len(unhealthyNodes),
+		maxUnhealthyCount))
+}
+
+// isNodeUnhealthy returns true if the node is either SchedulingDisabled or meet unhealthy status conditions like
+// NotReady, OutOfDisk and/or NetworkUnavailable. Otherwise, it returns false.
+// This follows the same logic as MCO for Linux nodes.
+// See https://github.com/openshift/machine-config-operator/blob/master/pkg/controller/common/layered_node_state.go#L180
+func (r *instanceReconciler) isNodeUnhealthy(node *core.Node) bool {
+	// check if are marked with SchedulingDisabled
+	if node.Spec.Unschedulable {
+		r.log.V(1).Info("SchedulingDisabled", "node", node.Name)
+		return true
+	}
+	// check if the node conditions
+	for i := range node.Status.Conditions {
+		cond := &node.Status.Conditions[i]
+		// consider the node for unhealthy only when:
+		// - NodeReady condition status is not ConditionTrue,
+		// - NodeDiskPressure condition status is not ConditionFalse,
+		// - NodeNetworkUnavailable condition status is not ConditionFalse.
+		if cond.Type == core.NodeReady && cond.Status != core.ConditionTrue {
+			r.log.V(1).Info("NotReady", "node", node.Name)
+			return true
+		}
+		if cond.Type == core.NodeDiskPressure && cond.Status != core.ConditionFalse {
+			r.log.V(1).Info("OutOfDisk", "node", node.Name)
+			return true
+		}
+		if cond.Type == core.NodeNetworkUnavailable && cond.Status != core.ConditionFalse {
+			r.log.V(1).Info("NetworkUnavailable", "node", node.Name)
+			return true
+		}
+	}
+	// no unhealthy criteria matched, node is healthy
+	return false
+}
+
+// reconcileMaxUnhealthyErr reconciles the max unhealthy error by generating an event and requeuing the request
+func (r *instanceReconciler) reconcileMaxUnhealthyErr(reference runtime.Object, err error) (ctrl.Result, error) {
+	r.log.Info("reached", "max unhealthy", err.Error())
+	r.recorder.Eventf(reference, core.EventTypeNormal, "MaxUnhealthyCountReached", err.Error())
+	// requeue to allow the current unhealthy nodes to be reconciled
+	return ctrl.Result{RequeueAfter: retry.Interval}, nil
 }
 
 // instanceFromNode returns an instance object for the given node. Requires a username that can be used to SSH into the

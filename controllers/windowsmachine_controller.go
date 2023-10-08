@@ -351,6 +351,11 @@ func (r *WindowsMachineReconciler) Reconcile(ctx context.Context,
 				"Machine %s authentication failure", machine.Name)
 			return ctrl.Result{}, r.deleteMachine(machine)
 		}
+		// check max unhealthy reached
+		var maxUnhealthyErr *MaxUnhealthyErr
+		if errors.As(err, &maxUnhealthyErr) {
+			return r.reconcileMaxUnhealthyErr(machine, err)
+		}
 		r.recorder.Eventf(machine, core.EventTypeWarning, "MachineSetupFailure",
 			"Machine %s configuration failure", machine.Name)
 		return ctrl.Result{}, err
