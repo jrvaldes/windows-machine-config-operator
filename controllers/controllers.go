@@ -27,6 +27,12 @@ import (
 	"github.com/openshift/windows-machine-config-operator/version"
 )
 
+const (
+	// maxUnhealthyCount is the maximum number of nodes that are not ready to serve at a given time.
+	// TODO: https://issues.redhat.com/browse/WINC-524
+	maxUnhealthyCount = 1
+)
+
 // instanceReconciler contains everything needed to perform actions on a Windows instance
 type instanceReconciler struct {
 	// Client is the cache client
