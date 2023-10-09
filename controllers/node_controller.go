@@ -33,6 +33,7 @@ import (
 
 	"github.com/openshift/windows-machine-config-operator/pkg/cluster"
 	"github.com/openshift/windows-machine-config-operator/pkg/condition"
+	"github.com/openshift/windows-machine-config-operator/pkg/locker"
 	"github.com/openshift/windows-machine-config-operator/pkg/metadata"
 	"github.com/openshift/windows-machine-config-operator/pkg/nodeconfig"
 	"github.com/openshift/windows-machine-config-operator/pkg/secrets"
@@ -50,7 +51,8 @@ type nodeReconciler struct {
 }
 
 // NewNodeReconciler returns a pointer to a new nodeReconciler
-func NewNodeReconciler(mgr manager.Manager, clusterConfig cluster.Config, watchNamespace string) (*nodeReconciler, error) {
+func NewNodeReconciler(mgr manager.Manager, clusterConfig cluster.Config, watchNamespace string,
+	reconcileLocker *locker.ReconcileLocker) (*nodeReconciler, error) {
 	clientset, err := kubernetes.NewForConfig(mgr.GetConfig())
 	if err != nil {
 		return nil, fmt.Errorf("error creating kubernetes clientset: %w", err)
@@ -64,6 +66,7 @@ func NewNodeReconciler(mgr manager.Manager, clusterConfig cluster.Config, watchN
 			clusterServiceCIDR: clusterConfig.Network().GetServiceCIDR(),
 			watchNamespace:     watchNamespace,
 			recorder:           mgr.GetEventRecorderFor(NodeController),
+			reconcileLocker:    reconcileLocker,
 		},
 	}, nil
 }
@@ -71,6 +74,10 @@ func NewNodeReconciler(mgr manager.Manager, clusterConfig cluster.Config, watchN
 // Reconcile is part of the main kubernetes reconciliation loop which reads that state of the cluster for a
 // Node object and aims to move the current state of the cluster closer to the desired state.
 func (r *nodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (result ctrl.Result, err error) {
+	// blocks instance reconciliations until this one is done
+	r.reconcileLocker.Lock()
+	defer r.reconcileLocker.Unlock()
+
 	r.log = r.log.WithValues(NodeController, req.NamespacedName)
 	// Prevent WMCO upgrades while Node objects are being processed
 	if err := condition.MarkAsBusy(r.client, r.watchNamespace, r.recorder, NodeController); err != nil {
