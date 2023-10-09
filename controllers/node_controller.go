@@ -33,6 +33,7 @@ import (
 
 	"github.com/openshift/windows-machine-config-operator/pkg/cluster"
 	"github.com/openshift/windows-machine-config-operator/pkg/condition"
+	"github.com/openshift/windows-machine-config-operator/pkg/locker"
 	"github.com/openshift/windows-machine-config-operator/pkg/metadata"
 	"github.com/openshift/windows-machine-config-operator/pkg/nodeconfig"
 	"github.com/openshift/windows-machine-config-operator/pkg/secrets"
@@ -50,7 +51,8 @@ type nodeReconciler struct {
 }
 
 // NewNodeReconciler returns a pointer to a new nodeReconciler
-func NewNodeReconciler(mgr manager.Manager, clusterConfig cluster.Config, watchNamespace string) (*nodeReconciler, error) {
+func NewNodeReconciler(mgr manager.Manager, clusterConfig cluster.Config, watchNamespace string,
+	reconcileLocker *locker.ReconcileLocker) (*nodeReconciler, error) {
 	clientset, err := kubernetes.NewForConfig(mgr.GetConfig())
 	if err != nil {
 		return nil, fmt.Errorf("error creating kubernetes clientset: %w", err)
@@ -64,6 +66,7 @@ func NewNodeReconciler(mgr manager.Manager, clusterConfig cluster.Config, watchN
 			clusterServiceCIDR: clusterConfig.Network().GetServiceCIDR(),
 			watchNamespace:     watchNamespace,
 			recorder:           mgr.GetEventRecorderFor(NodeController),
+			reconcileLocker:    reconcileLocker,
 		},
 	}, nil
 }

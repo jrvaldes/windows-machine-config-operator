@@ -25,6 +25,7 @@ import (
 
 	"github.com/openshift/windows-machine-config-operator/controllers"
 	"github.com/openshift/windows-machine-config-operator/pkg/cluster"
+	"github.com/openshift/windows-machine-config-operator/pkg/locker"
 	"github.com/openshift/windows-machine-config-operator/pkg/metrics"
 	"github.com/openshift/windows-machine-config-operator/pkg/nodeconfig/payload"
 	"github.com/openshift/windows-machine-config-operator/pkg/servicescm"
@@ -178,8 +179,11 @@ func main() {
 		os.Exit(1)
 	}
 
+	// init locker
+	reconcileLocker := locker.NewReconcileLocker()
+
 	// Setup all Controllers
-	winMachineReconciler, err := controllers.NewWindowsMachineReconciler(mgr, clusterConfig, watchNamespace)
+	winMachineReconciler, err := controllers.NewWindowsMachineReconciler(mgr, clusterConfig, watchNamespace, reconcileLocker)
 	if err != nil {
 		setupLog.Error(err, "unable to create Windows Machine reconciler")
 		os.Exit(1)
@@ -189,7 +193,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	nodeReconciler, err := controllers.NewNodeReconciler(mgr, clusterConfig, watchNamespace)
+	nodeReconciler, err := controllers.NewNodeReconciler(mgr, clusterConfig, watchNamespace, reconcileLocker)
 	if err != nil {
 		setupLog.Error(err, "unable to create Node reconciler")
 		os.Exit(1)
@@ -209,7 +213,7 @@ func main() {
 	}
 
 	proxyEnabled := cluster.IsProxyEnabled()
-	configMapReconciler, err := controllers.NewConfigMapReconciler(mgr, clusterConfig, watchNamespace, proxyEnabled)
+	configMapReconciler, err := controllers.NewConfigMapReconciler(mgr, clusterConfig, watchNamespace, proxyEnabled, reconcileLocker)
 	if err != nil {
 		setupLog.Error(err, "unable to create ConfigMap reconciler")
 		os.Exit(1)
