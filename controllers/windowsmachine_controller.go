@@ -29,6 +29,7 @@ import (
 	"github.com/openshift/windows-machine-config-operator/pkg/condition"
 	"github.com/openshift/windows-machine-config-operator/pkg/crypto"
 	"github.com/openshift/windows-machine-config-operator/pkg/instance"
+	"github.com/openshift/windows-machine-config-operator/pkg/locker"
 	"github.com/openshift/windows-machine-config-operator/pkg/metadata"
 	"github.com/openshift/windows-machine-config-operator/pkg/metrics"
 	"github.com/openshift/windows-machine-config-operator/pkg/nodeconfig"
@@ -65,7 +66,8 @@ type WindowsMachineReconciler struct {
 }
 
 // NewWindowsMachineReconciler returns a pointer to a WindowsMachineReconciler
-func NewWindowsMachineReconciler(mgr manager.Manager, clusterConfig cluster.Config, watchNamespace string) (*WindowsMachineReconciler, error) {
+func NewWindowsMachineReconciler(mgr manager.Manager, clusterConfig cluster.Config, watchNamespace string,
+	reconcileLocker *locker.ReconcileLocker) (*WindowsMachineReconciler, error) {
 	// The client provided by the GetClient() method of the manager is a split client that will always hit the API
 	// server when writing. When reading, the client will either use a cache populated by the informers backing the
 	// controllers, or in certain cases read directly from the API server. It will read from the server both for
@@ -98,6 +100,7 @@ func NewWindowsMachineReconciler(mgr manager.Manager, clusterConfig cluster.Conf
 			watchNamespace:       watchNamespace,
 			prometheusNodeConfig: pc,
 			platform:             clusterConfig.Platform(),
+			reconcileLocker:      reconcileLocker,
 		},
 		machineClient: machineClient,
 	}, nil

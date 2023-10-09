@@ -20,6 +20,7 @@ import (
 	"github.com/openshift/windows-machine-config-operator/pkg/condition"
 	"github.com/openshift/windows-machine-config-operator/pkg/crypto"
 	"github.com/openshift/windows-machine-config-operator/pkg/instance"
+	"github.com/openshift/windows-machine-config-operator/pkg/locker"
 	"github.com/openshift/windows-machine-config-operator/pkg/metadata"
 	"github.com/openshift/windows-machine-config-operator/pkg/metrics"
 	"github.com/openshift/windows-machine-config-operator/pkg/nodeconfig"
@@ -46,6 +47,8 @@ type instanceReconciler struct {
 	recorder record.EventRecorder
 	// platform indicates the cloud on which the cluster is running
 	platform config.PlatformType
+	// reconcileLocker is used to lock the reconcile process among controllers
+	reconcileLocker *locker.ReconcileLocker
 }
 
 // ensureInstanceIsUpToDate ensures that the given instance is configured as a node and upgraded to the specifications
@@ -76,6 +79,10 @@ func (r *instanceReconciler) ensureInstanceIsUpToDate(instanceInfo *instance.Inf
 		// Instance requiring an upgrade indicates that node object is present with the version annotation
 		r.log.Info("instance requires upgrade", "node", instanceInfo.Node.GetName(), "version",
 			instanceInfo.Node.GetAnnotations()[metadata.VersionAnnotation], "expected version", version.Get())
+		// blocks instance reconciliation
+		r.reconcileLocker.Lock()
+		defer r.reconcileLocker.Unlock()
+
 		if err := nc.Deconfigure(); err != nil {
 			return err
 		}

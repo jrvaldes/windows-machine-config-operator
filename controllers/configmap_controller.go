@@ -47,6 +47,7 @@ import (
 	"github.com/openshift/windows-machine-config-operator/pkg/crypto"
 	"github.com/openshift/windows-machine-config-operator/pkg/ignition"
 	"github.com/openshift/windows-machine-config-operator/pkg/instance"
+	"github.com/openshift/windows-machine-config-operator/pkg/locker"
 	"github.com/openshift/windows-machine-config-operator/pkg/metrics"
 	"github.com/openshift/windows-machine-config-operator/pkg/nodeconfig"
 	"github.com/openshift/windows-machine-config-operator/pkg/patch"
@@ -88,7 +89,7 @@ type ConfigMapReconciler struct {
 
 // NewConfigMapReconciler returns a pointer to a ConfigMapReconciler
 func NewConfigMapReconciler(mgr manager.Manager, clusterConfig cluster.Config, watchNamespace string,
-	proxyEnabled bool) (*ConfigMapReconciler, error) {
+	proxyEnabled bool, reconcileLocker *locker.ReconcileLocker) (*ConfigMapReconciler, error) {
 	clientset, err := kubernetes.NewForConfig(mgr.GetConfig())
 	if err != nil {
 		return nil, fmt.Errorf("error creating kubernetes clientset: %w", err)
@@ -136,6 +137,7 @@ func NewConfigMapReconciler(mgr manager.Manager, clusterConfig cluster.Config, w
 			recorder:             mgr.GetEventRecorderFor(ConfigMapController),
 			prometheusNodeConfig: pc,
 			platform:             clusterConfig.Platform(),
+			reconcileLocker:      reconcileLocker,
 		},
 		servicesManifest: svcData,
 		proxyEnabled:     proxyEnabled,
