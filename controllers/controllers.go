@@ -79,7 +79,10 @@ func (r *instanceReconciler) ensureInstanceIsUpToDate(instanceInfo *instance.Inf
 		// Instance requiring an upgrade indicates that node object is present with the version annotation
 		r.log.Info("instance requires upgrade", "node", instanceInfo.Node.GetName(), "version",
 			instanceInfo.Node.GetAnnotations()[metadata.VersionAnnotation], "expected version", version.Get())
-		// blocks instance reconciliation
+		if err := r.checkUnhealthyCountForNode(instanceInfo.Node); err != nil {
+			return err
+		}
+		// blocks instance reconciliation if needed
 		r.reconcileLocker.Lock()
 		defer r.reconcileLocker.Unlock()
 
@@ -89,6 +92,36 @@ func (r *instanceReconciler) ensureInstanceIsUpToDate(instanceInfo *instance.Inf
 	}
 
 	return nc.Configure()
+}
+
+// checkUnhealthyCountForNode checks the number of unhealthy nodes and returns an error if max capacity is reached
+// following the maxUnhealthyCount limit
+func (r *instanceReconciler) checkUnhealthyCountForNode(current *core.Node) error {
+	// get the current list of Windows nodes, both BYOH and Machine nodes
+	nodes := &core.NodeList{}
+	err := r.client.List(context.TODO(), nodes, client.MatchingLabels{core.LabelOSStable: "windows"})
+	if err != nil {
+		return fmt.Errorf("error listing nodes: %w", err)
+	}
+	unhealthyNodesCount := 0
+	for _, node := range nodes.Items {
+		if isNodeUnhealthy(&node) {
+			// return if the current node is in the unhealthy list so that ongoing reconciliation is not interrupted
+			if node.Name == current.Name {
+				r.log.V(1).Info("processing unhealthy", "node", node.Name)
+				return nil
+			}
+			unhealthyNodesCount++
+		}
+	}
+	if unhealthyNodesCount >= maxUnhealthyCount {
+		return fmt.Errorf("reached max unhealthy node count %d, must be less than %d", unhealthyNodesCount,
+			maxUnhealthyCount)
+
+	}
+	// check passes given the number of unhealthy nodes is less than the max allowed
+	return nil
+
 }
 
 // instanceFromNode returns an instance object for the given node. Requires a username that can be used to SSH into the
@@ -287,4 +320,34 @@ func markAsFreeOnSuccess(c client.Client, watchNamespace string, recorder record
 		return condition.MarkAsFree(c, watchNamespace, recorder, controllerName)
 	}
 	return err
+}
+
+// isNodeUnhealthy returns true if the node is either SchedulingDisabled or meet unhealthy status conditions like
+// NotReady, OutOfDisk and/or NetworkUnavailable. Otherwise, it returns false.
+// This follows the same logic as MCO for Linux nodes.
+// See https://github.com/openshift/machine-config-operator/blob/master/pkg/controller/common/layered_node_state.go#L180
+func isNodeUnhealthy(node *core.Node) bool {
+	// check if are marked with SchedulingDisabled
+	if node.Spec.Unschedulable {
+		return true
+	}
+	// check if the node conditions
+	for i := range node.Status.Conditions {
+		cond := &node.Status.Conditions[i]
+		// consider the node for unhealthy only when:
+		// - NodeReady condition status is not ConditionTrue,
+		// - NodeDiskPressure condition status is not ConditionFalse,
+		// - NodeNetworkUnavailable condition status is not ConditionFalse.
+		if cond.Type == core.NodeReady && cond.Status != core.ConditionTrue {
+			return true
+		}
+		if cond.Type == core.NodeDiskPressure && cond.Status != core.ConditionFalse {
+			return true
+		}
+		if cond.Type == core.NodeNetworkUnavailable && cond.Status != core.ConditionFalse {
+			return true
+		}
+	}
+	// no unhealthy criteria matched, node is healthy
+	return false
 }

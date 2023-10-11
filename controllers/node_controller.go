@@ -107,6 +107,16 @@ func (r *nodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resul
 		if err != nil {
 			return ctrl.Result{}, err
 		}
+
+		r.log.Info("instance requires reboot", "node", instanceInfo.Node.GetName(), "version",
+			instanceInfo.Node.GetAnnotations()[metadata.VersionAnnotation])
+
+		if err := r.checkUnhealthyCountForNode(instanceInfo.Node); err != nil {
+			return ctrl.Result{}, err
+		}
+		r.reconcileLocker.Lock()
+		defer r.reconcileLocker.Unlock()
+
 		nc, err := nodeconfig.NewNodeConfig(r.client, r.k8sclientset, r.clusterServiceCIDR, r.watchNamespace,
 			instanceInfo, signer, nil, nil, r.platform)
 		if err != nil {
