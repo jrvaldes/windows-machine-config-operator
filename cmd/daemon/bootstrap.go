@@ -19,6 +19,8 @@ limitations under the License.
 package main
 
 import (
+	"os"
+
 	"github.com/spf13/cobra"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog/v2"
@@ -50,14 +52,20 @@ func init() {
 func runBootstrapCmd(cmd *cobra.Command, args []string) {
 	cfg, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
 	if err != nil {
-		klog.Exitf("error building config: %s", err.Error())
+		klog.Errorf("error building config: %s", err.Error())
+		klog.Flush()
+		os.Exit(1)
 	}
 	sc, err := controller.NewServiceController(ctrl.SetupSignalHandler(), "", namespace, controller.Options{Config: cfg})
 	if err != nil {
-		klog.Exitf("error creating Service Controller: %s", err.Error())
+		klog.Errorf("error creating Service Controller: %s", err.Error())
+		klog.Flush()
+		os.Exit(1)
 	}
 	klog.Info("bootstrapping Windows instance")
 	if err := sc.Bootstrap(desiredVersion); err != nil {
-		klog.Exit(err.Error())
+		klog.Error(err.Error())
+		klog.Flush()
+		os.Exit(1)
 	}
 }

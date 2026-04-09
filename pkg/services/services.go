@@ -36,6 +36,18 @@ const (
 
 // GenerateManifest returns the expected state of the Windows service configmap. If debug is true, debug logging
 // will be enabled for services that support it.
+//
+// Log rotation via kube-log-runner is used by: kubelet, kube-proxy.
+// WICD also uses kube-log-runner, but is configured separately (not through the services ConfigMap).
+// The following services use native logging flags and do not support the SERVICES_LOG_FILE_SIZE,
+// SERVICES_LOG_FILE_AGE, or SERVICES_LOG_FLUSH_INTERVAL environment variables:
+//   - containerd: uses --log-file with built-in rotation
+//   - hybrid-overlay: uses --logfile (klog-based, no rotation)
+//   - csi-proxy: uses -log_file (klog-based, no rotation)
+//   - windows_exporter: logs to stdout (no file-based logging)
+//
+// TODO: evaluate migrating remaining services to kube-log-runner for consistent log rotation
+// https://issues.redhat.com/browse/WINC-853
 func GenerateManifest(kubeletArgsFromIgnition map[string]string, apiServerEndpoint string, vxlanPort string,
 	platform config.PlatformType, debug bool) (*servicescm.Data, error) {
 	windowsExporterServiceCommand := fmt.Sprintf("%s --collectors.enabled "+
@@ -153,7 +165,7 @@ func hybridOverlayConfiguration(apiServerEndpoint, vxlanPort string, debug bool)
 
 // kubeProxyConfiguration returns the Service definition for kube-proxy
 func kubeProxyConfiguration(debug bool) servicescm.Service {
-	cmd := getLogRunnerForCmd(windows.KubeProxyPath, windows.KubeProxyLog)
+	cmd := GetLogRunnerForCmd(windows.KubeProxyPath, windows.KubeProxyLog)
 	cmd = fmt.Sprintf("%s --config %s --windows-service", cmd, windows.KubeProxyConfigPath)
 	verbosity := "0"
 	if debug {
@@ -231,7 +243,7 @@ func getKubeletServiceConfiguration(argsFromIginition map[string]string, debug b
 		preScripts = append(preScripts, hostnameOverridePowershellVar)
 	}
 
-	kubeletServiceCmd := getLogRunnerForCmd(windows.KubeletPath, windows.KubeletLog)
+	kubeletServiceCmd := GetLogRunnerForCmd(windows.KubeletPath, windows.KubeletLog)
 
 	for _, arg := range kubeletArgs {
 		kubeletServiceCmd += fmt.Sprintf(" %s", arg)
@@ -316,33 +328,10 @@ func getHostnameCmd(platformType config.PlatformType) string {
 	}
 }
 
-// getLogRunnerForCmd returns the command string to run the given commandPath with kube-log-runner
+// GetLogRunnerForCmd returns the command string to run the given commandPath with kube-log-runner
 // logging to the given logfilePath. Log rotation parameters can be configured via environment variables.
-func getLogRunnerForCmd(commandPath, logfilePath string) string {
-	cmdBuilder := strings.Builder{}
-	cmdBuilder.WriteString(windows.KubeLogRunnerPath)
-
-	cmdBuilder.WriteString(" -log-file=")
-	cmdBuilder.WriteString(logfilePath)
-
-	if logFileSize != "" {
-		cmdBuilder.WriteString(" -log-file-size=")
-		cmdBuilder.WriteString(logFileSize)
-	}
-
-	if logFileAge != "" {
-		cmdBuilder.WriteString(" -log-file-age=")
-		cmdBuilder.WriteString(logFileAge)
-	}
-
-	if flushInterval != "" {
-		cmdBuilder.WriteString(" -flush-interval=")
-		cmdBuilder.WriteString(flushInterval)
-	}
-
-	cmdBuilder.WriteString(" " + commandPath)
-
-	return cmdBuilder.String()
+func GetLogRunnerForCmd(commandPath, logfilePath string) string {
+	return windows.LogRunnerCmd(commandPath, logfilePath, logFileSize, logFileAge, flushInterval)
 }
 
 // getEnvQuantityString returns the string value of the environment variable for the given key

@@ -47,6 +47,8 @@ const (
 	HybridOverlayLogDir = logDir + "\\hybrid-overlay"
 	// wicdLogDir is the remote wicd log directory
 	wicdLogDir = logDir + "\\wicd"
+	// WicdLog is the location of the wicd log file
+	WicdLog = wicdLogDir + "\\wicd.log"
 	// cniDir is the directory for storing CNI binaries
 	cniDir = K8sDir + "\\cni"
 	// CniConfDir is the directory for storing CNI configuration
@@ -579,13 +581,59 @@ func (vm *windows) Bootstrap(ctx context.Context, desiredVer, watchNamespace, wi
 	return nil
 }
 
+// LogRunnerCmd returns the command string to run the given commandPath with kube-log-runner
+// logging to the given logfilePath. The logFileSize, logFileAge, and flushInterval parameters
+// are optional — pass empty string to omit them.
+func LogRunnerCmd(commandPath, logfilePath, logFileSize, logFileAge, flushInterval string) string {
+	return KubeLogRunnerPath + " " + logRunnerArgs(commandPath, logfilePath, logFileSize, logFileAge, flushInterval)
+}
+
+// logRunnerArgs returns the kube-log-runner arguments (without the kube-log-runner binary path itself)
+// for wrapping the given commandPath with log rotation to the given logfilePath.
+func logRunnerArgs(commandPath, logfilePath, logFileSize, logFileAge, flushInterval string) string {
+	var sb strings.Builder
+
+	sb.WriteString("-log-file=")
+	sb.WriteString(logfilePath)
+
+	if logFileSize != "" {
+		sb.WriteString(" -log-file-size=")
+		sb.WriteString(logFileSize)
+	}
+
+	if logFileAge != "" {
+		sb.WriteString(" -log-file-age=")
+		sb.WriteString(logFileAge)
+	}
+
+	if flushInterval != "" {
+		sb.WriteString(" -flush-interval=")
+		sb.WriteString(flushInterval)
+	}
+
+	sb.WriteString(" ")
+	sb.WriteString(commandPath)
+
+	return sb.String()
+}
+
+// logRotationEnvVars returns the values of the log rotation environment variables:
+// SERVICES_LOG_FILE_SIZE, SERVICES_LOG_FILE_AGE, and SERVICES_LOG_FLUSH_INTERVAL.
+func logRotationEnvVars() (logFileSize, logFileAge, flushInterval string) {
+	return strings.TrimSpace(os.Getenv("SERVICES_LOG_FILE_SIZE")),
+		strings.TrimSpace(os.Getenv("SERVICES_LOG_FILE_AGE")),
+		strings.TrimSpace(os.Getenv("SERVICES_LOG_FLUSH_INTERVAL"))
+}
+
 // ConfigureWICD starts the Windows Instance Config Daemon service
 func (vm *windows) ConfigureWICD(watchNamespace, wicdKubeconfigContents string) error {
 	if err := vm.ensureWICDFilesExist(wicdKubeconfigContents); err != nil {
 		return err
 	}
-	wicdServiceArgs := fmt.Sprintf("controller --windows-service --log-dir %s --namespace %s --kubeconfig %s --cert-dir %s --cert-duration %s --ca-bundle %s",
-		wicdLogDir, watchNamespace, WICDKubeconfigPath, WICDCertDir, WICDCertDuration, TrustedCABundlePath)
+	logFileSize, logFileAge, flushInterval := logRotationEnvVars()
+	wicdServiceArgs := fmt.Sprintf("%s controller --windows-service --namespace %s --kubeconfig %s --cert-dir %s --cert-duration %s --ca-bundle %s",
+		logRunnerArgs(wicdPath, WicdLog, logFileSize, logFileAge, flushInterval),
+		watchNamespace, WICDKubeconfigPath, WICDCertDir, WICDCertDuration, TrustedCABundlePath)
 	// if WICD crashes, attempt to restart WICD after 10, 30, and 60 seconds, and then every 2 minutes after that.
 	// reset this counter 5 min after a period with no crashes
 	recoveryActions := []recoveryAction{
@@ -608,7 +656,7 @@ func (vm *windows) ConfigureWICD(watchNamespace, wicdKubeconfigContents string) 
 	}
 	// if WICD has not crashed in the past 5 minutes, reset the crash counter
 	recoveryPeriod := 300
-	wicdService, err := newService(wicdPath, WicdServiceName, wicdServiceArgs, nil, recoveryActions, recoveryPeriod)
+	wicdService, err := newService(KubeLogRunnerPath, WicdServiceName, wicdServiceArgs, nil, recoveryActions, recoveryPeriod)
 	if err != nil {
 		return fmt.Errorf("error creating %s service object: %w", WicdServiceName, err)
 	}
@@ -622,7 +670,7 @@ func (vm *windows) ConfigureWICD(watchNamespace, wicdKubeconfigContents string) 
 // Interface helper methods
 
 // ensureWICDFilesExist ensures all files required for WICD to run exist. If needed, creates the destination directory,
-// WICD binary, and kubeconfig.
+// WICD binary, kube-log-runner binary, and kubeconfig.
 func (vm *windows) ensureWICDFilesExist(wicdKubeconfig string) error {
 	if _, err := vm.Run(mkdirCmd(K8sDir), false); err != nil {
 		return fmt.Errorf("unable to create remote directory %s: %w", K8sDir, err)
@@ -633,6 +681,13 @@ func (vm *windows) ensureWICDFilesExist(wicdKubeconfig string) error {
 	}
 	if err := vm.EnsureFile(wicdFileInfo, K8sDir); err != nil {
 		return fmt.Errorf("error copying %s to %s: %w", wicdFileInfo.Path, K8sDir, err)
+	}
+	kubeLogRunnerFileInfo, err := payload.NewCompressedFileInfo(payload.KubeLogRunnerPath)
+	if err != nil {
+		return fmt.Errorf("could not create CompressedFileInfo object for file %s: %w", payload.KubeLogRunnerPath, err)
+	}
+	if err := vm.EnsureFile(kubeLogRunnerFileInfo, K8sDir); err != nil {
+		return fmt.Errorf("error copying %s to %s: %w", kubeLogRunnerFileInfo.Path, K8sDir, err)
 	}
 	return vm.ensureWICDKubeconfig(wicdKubeconfig)
 }
@@ -741,17 +796,22 @@ func (vm *windows) transferFiles() error {
 	return nil
 }
 
-// ensureServiceIsRunning ensures a Windows service is running on the VM, creating and starting it if not already so
+// ensureServiceIsRunning ensures a Windows service is running on the VM, creating and starting it if not already so.
+// If the service already exists, it is removed and recreated to ensure the binary path and arguments are up to date.
 func (vm *windows) ensureServiceIsRunning(svc *service) error {
 	serviceExists, err := vm.serviceExists(svc.name)
 	if err != nil {
 		return fmt.Errorf("error checking if %s Windows service exists: %w", svc.name, err)
 	}
-	// create service if it does not exist
-	if !serviceExists {
-		if err := vm.createService(svc); err != nil {
-			return fmt.Errorf("error creating %s Windows service: %w", svc.name, err)
+	// Remove and recreate the service if it already exists, ensuring the binPath and args are current.
+	// This handles upgrade scenarios where the service binary path may have changed.
+	if serviceExists {
+		if err := vm.ensureServiceIsRemoved(svc.name); err != nil {
+			return fmt.Errorf("error removing existing %s Windows service for recreation: %w", svc.name, err)
 		}
+	}
+	if err := vm.createService(svc); err != nil {
+		return fmt.Errorf("error creating %s Windows service: %w", svc.name, err)
 	}
 	if err := vm.startService(svc); err != nil {
 		return fmt.Errorf("error starting %s Windows service: %w", svc.name, err)
@@ -1091,10 +1151,11 @@ func rmDirCmd(dirName string) string {
 	return fmt.Sprintf("if(Test-Path %s) {Remove-Item -Recurse -Force %s}", dirName, dirName)
 }
 
-// rmK8sFilesCmd() returns the PowerShell command to remove the k8sDir files excluding WICD files
+// rmK8sFilesCmd returns the PowerShell command to remove the k8sDir files excluding WICD files.
+// kube-log-runner.exe is excluded because WICD's service binary path depends on it.
 func rmK8sFilesCmd() string {
-	return fmt.Sprintf("if(Test-Path %s) {Get-ChildItem %s -Recurse -Exclude %s,%s | Remove-Item -Force -Recurse}",
-		K8sDir, K8sDir, wicdPath, WICDKubeconfigPath)
+	return fmt.Sprintf("if(Test-Path %s) {Get-ChildItem %s -Recurse -Exclude %s,%s,%s | Remove-Item -Force -Recurse}",
+		K8sDir, K8sDir, wicdPath, WICDKubeconfigPath, KubeLogRunnerPath)
 }
 
 // getHNSNetworkCmd returns the Windows command to get HNS network by name

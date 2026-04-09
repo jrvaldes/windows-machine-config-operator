@@ -461,7 +461,7 @@ func TestGetLogRunnerForCmd(t *testing.T) {
 			logFileAge = tc.logFileAge
 			flushInterval = tc.flushInterval
 
-			result := getLogRunnerForCmd(tc.commandPath, tc.logfilePath)
+			result := GetLogRunnerForCmd(tc.commandPath, tc.logfilePath)
 
 			for _, expected := range tc.expectedContains {
 				assert.Contains(t, result, expected,

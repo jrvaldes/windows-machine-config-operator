@@ -21,6 +21,7 @@ package cleanup
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	core "k8s.io/api/core/v1"
@@ -58,7 +59,9 @@ func Deconfigure(cfg *rest.Config, ctx context.Context, configMapNamespace strin
 	}
 	svcMgr, err := manager.New()
 	if err != nil {
-		klog.Exitf("could not create service manager: %s", err.Error())
+		klog.Errorf("could not create service manager: %s", err.Error())
+		klog.Flush()
+		os.Exit(1)
 	}
 	defer svcMgr.Disconnect()
 	mergedCMData, removeAllTaggedServices, err := getMergedCMData(ctx, directClient, configMapNamespace, node)

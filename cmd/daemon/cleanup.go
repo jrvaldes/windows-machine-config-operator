@@ -19,6 +19,8 @@ limitations under the License.
 package main
 
 import (
+	"os"
+
 	"github.com/spf13/cobra"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog/v2"
@@ -44,10 +46,14 @@ func init() {
 func runCleanupCmd(cmd *cobra.Command, args []string) {
 	cfg, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
 	if err != nil {
-		klog.Exitf("error building config: %s", err.Error())
+		klog.Errorf("error building config: %s", err.Error())
+		klog.Flush()
+		os.Exit(1)
 	}
 	ctx := ctrl.SetupSignalHandler()
 	if err := cleanup.Deconfigure(cfg, ctx, namespace); err != nil {
-		klog.Exitf(err.Error())
+		klog.Errorf(err.Error())
+		klog.Flush()
+		os.Exit(1)
 	}
 }
