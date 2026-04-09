@@ -25,7 +25,7 @@ func (tc *testContext) testNodeLogs(t *testing.T) {
 		"hybrid-overlay/hybrid-overlay.log",
 		"kubelet/kubelet.log",
 		"containerd/containerd.log",
-		"wicd/windows-instance-config-daemon.exe.INFO",
+		"wicd/wicd.log",
 		"csi-proxy/csi-proxy.log",
 	}
 	nodeArtifacts := filepath.Join(tc.artifactDir, "nodes")

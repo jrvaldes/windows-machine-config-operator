@@ -6,6 +6,7 @@ import (
 	config "github.com/openshift/api/config/v1"
 	"github.com/stretchr/testify/assert"
 
+	"github.com/openshift/windows-machine-config-operator/pkg/logconfig"
 	"github.com/openshift/windows-machine-config-operator/pkg/nodeconfig/payload"
 )
 
@@ -88,4 +89,19 @@ func TestSplitPath(t *testing.T) {
 			assert.Equal(t, test.expectedOutFileName, fileName)
 		})
 	}
+}
+
+func TestRmK8sFilesCmd(t *testing.T) {
+	cmd := rmK8sFilesCmd()
+	// Verify all three WICD-related files are excluded from deletion
+	assert.Contains(t, cmd, wicdPath,
+		"rmK8sFilesCmd should exclude WICD binary")
+	assert.Contains(t, cmd, WICDKubeconfigPath,
+		"rmK8sFilesCmd should exclude WICD kubeconfig")
+	assert.Contains(t, cmd, logconfig.KubeLogRunnerPath,
+		"rmK8sFilesCmd should exclude kube-log-runner (WICD's registered service binary)")
+	// Verify basic command structure
+	assert.Contains(t, cmd, "-Exclude")
+	assert.Contains(t, cmd, "Remove-Item -Force -Recurse")
+	assert.Contains(t, cmd, K8sDir)
 }

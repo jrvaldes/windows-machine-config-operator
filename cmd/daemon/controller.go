@@ -19,7 +19,6 @@ limitations under the License.
 package main
 
 import (
-	"flag"
 	"os"
 	"time"
 
@@ -39,7 +38,6 @@ var (
 		Run: runControllerCmd,
 	}
 	windowsService bool
-	logDir         string
 	caBundle       string
 	// Certificate-based authentication options
 	certDir      string
@@ -48,8 +46,6 @@ var (
 
 func init() {
 	rootCmd.AddCommand(controllerCmd)
-	controllerCmd.PersistentFlags().StringVar(&logDir, "log-dir", "", "Directory to write logs to, "+
-		"if not provided, the command will log to stdout/stderr")
 	controllerCmd.PersistentFlags().BoolVar(&windowsService, "windows-service", false,
 		"Enables running as a Windows service")
 	controllerCmd.PersistentFlags().StringVar(&caBundle, "ca-bundle", "",
@@ -61,13 +57,6 @@ func init() {
 }
 
 func runControllerCmd(cmd *cobra.Command, args []string) {
-	if logDir != "" {
-		var fs flag.FlagSet
-		klog.InitFlags(&fs)
-		// When the logtostderr flag is set to true, which is the default, the log_dir arg is ignored
-		fs.Set("logtostderr", "false")
-		fs.Set("log_dir", logDir)
-	}
 	duration, err := time.ParseDuration(certDuration)
 	if err != nil {
 		klog.Errorf("invalid cert-duration %s: %v", certDuration, err)
