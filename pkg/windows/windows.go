@@ -878,10 +878,29 @@ func (vm *windows) ensureServiceIsRemoved(svcName string) error {
 	if err := vm.ensureServiceNotRunning(svc); err != nil {
 		return fmt.Errorf("error stopping %s Windows service: %w", svc.name, err)
 	}
+	if err := vm.stopProcess(svc); err != nil {
+		return fmt.Errorf("error stopping process %s: %w", svc.name, err)
+	}
 	if err := vm.deleteService(svc); err != nil {
 		return fmt.Errorf("error deleting %s Windows service: %w", svc.name, err)
 	}
+
 	vm.log.Info("deconfigured", "service", svc.name)
+	return nil
+}
+
+// stopProcess force-terminates the process matching the service name.
+// On Windows, sc.exe stop only signals the registered service binary; child processes it
+// created are not killed when the parent exits as they become orphans that retain OS file
+// locks, preventing binary replacement during upgrades.
+func (vm *windows) stopProcess(svc *service) error {
+	if svc == nil {
+		return fmt.Errorf("service object should not be nil")
+	}
+	killCmd := fmt.Sprintf("Stop-Process -Name '%s' -Force -ErrorAction SilentlyContinue", svc.name)
+	if _, err := vm.Run(killCmd, true); err != nil {
+		return fmt.Errorf("error stopping process %s: %w", svc.name, err)
+	}
 	return nil
 }
 
